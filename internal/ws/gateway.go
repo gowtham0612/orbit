@@ -2,7 +2,8 @@ package ws
 
 import (
 	"sync"
-	"sync/atomic"
+
+	"github.com/orbit/orbit/internal/metrics"
 )
 
 // Gateway manages the active local WebSocket connections.
@@ -11,19 +12,15 @@ type Gateway struct {
 	Unregister chan *Client
 	Clients    map[*Client]bool
 	mu         sync.RWMutex
-	Metrics    *Metrics
 }
 
-type Metrics struct {
-	ActiveConnections int64
-}
+
 
 func NewGateway() *Gateway {
 	return &Gateway{
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
 		Clients:    make(map[*Client]bool),
-		Metrics:    &Metrics{},
 	}
 }
 
@@ -33,7 +30,7 @@ func (g *Gateway) Run() {
 		case client := <-g.Register:
 			g.mu.Lock()
 			g.Clients[client] = true
-			atomic.AddInt64(&g.Metrics.ActiveConnections, 1)
+			metrics.ActiveConnections.Inc()
 			g.mu.Unlock()
 
 		case client := <-g.Unregister:
@@ -41,7 +38,7 @@ func (g *Gateway) Run() {
 			if _, ok := g.Clients[client]; ok {
 				delete(g.Clients, client)
 				close(client.Send)
-				atomic.AddInt64(&g.Metrics.ActiveConnections, -1)
+				metrics.ActiveConnections.Dec()
 			}
 			g.mu.Unlock()
 		}

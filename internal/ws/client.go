@@ -124,6 +124,7 @@ func (c *Client) SendJSON(env core.Envelope) {
 	case <-c.ctx.Done():
 		return
 	default: // Channel full, indicating slow client
+		log.Printf("WARN: Slow client %s backpressure limit reached. Disconnecting user aggressively.", c.UserID)
 		c.cancelFunc()
 	}
 }

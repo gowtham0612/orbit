@@ -14,6 +14,7 @@ import (
 	"github.com/orbit/orbit/internal/pubsub"
 	"github.com/orbit/orbit/internal/router"
 	"github.com/orbit/orbit/internal/ws"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -78,15 +79,8 @@ func main() {
 		client.ReadPump()
 	})
 
-	// Add metrics endpoint
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		metrics := map[string]interface{}{
-			"active_connections": gateway.Metrics.ActiveConnections,
-			"messages_published": msgRouter.GetMetrics().MessagesPublished,
-		}
-		json.NewEncoder(w).Encode(metrics)
-	})
+	// Add metrics endpoint via Prometheus
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// Add presence endpoint
 	mux.HandleFunc("/api/presence", func(w http.ResponseWriter, r *http.Request) {

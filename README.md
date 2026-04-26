@@ -4,10 +4,12 @@ An open-source, self-hosted realtime event mesh written in Go, powered by Redis 
 
 ## Architecture
 
-*   **WebSocket Gateway**: Handles high-concurrency client connections with strict heartbeats.
-*   **Redis PubSub Engine**: Used for low-latency fan-out of messages across horizontally scaled Orbit nodes.
-*   **Presence Tracker**: Tracks user online status per channel using Redis Sets with TTLs to prevent ghost users.
-*   **JS SDK**: Simple interface for publishers and subscribers.
+Orbit's broker architecture follows a strictly enforced `ORBIT_BROKER=redis` (V1 Engine) target.
+*   **WebSocket Gateway**: Handles high-concurrency client connections. Slow consumers are forcefully disconnected preventing I/O backpressure.
+*   **V1 Engine (Redis PubSub)**: Orbit features an ultra-resilient, multiplexed `PubSub` engine. Instead of a goroutine-per-channel block, Orbit streams events through a dedicated worker pool (configurable via `ORBIT_FANOUT_WORKERS=100`) heavily optimizing RAM bounds, whilst strictly preserving sequential per-channel message ordering via checksum hashing. Automatic Network-Partition reconstruction guarantees reconnection persistence.
+*   **Presence Tracker**: Tracks user online status per channel using explicit events (`presence.joined`, `presence.left`) built on top of Redis Sorted Sets.
+
+> Future Broker Adapters (V2 Redis Streams for persisted event-sourcing and V3 NATS for raw C10M scale-out speed) are architecturally viable utilizing the internal `pubsub.Engine` interface, but are explicitly unscaffolded for standard production.
 
 ## Quickstart
 

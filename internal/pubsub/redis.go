@@ -3,15 +3,34 @@ package pubsub
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"log"
+	"math/rand"
+	"os"
+	"strconv"
 	"sync"
+	"time"
 
+	"github.com/orbit/orbit/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
+type dispatchJob struct {
+	channel string
+	payload []byte
+}
+
 type RedisEngine struct {
 	client     *redis.Client
-	subs       map[string]*redis.PubSub
+	pubsub     *redis.PubSub
+
+	subs       map[string]bool
+	handlers   map[string]MessageHandler
 	subsMutex  sync.RWMutex
+
+	workers    []chan dispatchJob
+	numWorkers int
+
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 }
@@ -25,51 +44,70 @@ func NewRedisEngine(redisURL string) (*RedisEngine, error) {
 	client := redis.NewClient(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Test connection
 	if err := client.Ping(ctx).Err(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to ping redis: %w", err)
 	}
 
-	return &RedisEngine{
+	numWorkers := 100
+	if envStr := os.Getenv("ORBIT_FANOUT_WORKERS"); envStr != "" {
+		if c, err := strconv.Atoi(envStr); err == nil && c > 0 {
+			numWorkers = c
+		}
+	}
+
+	r := &RedisEngine{
 		client:     client,
-		subs:       make(map[string]*redis.PubSub),
+		subs:       make(map[string]bool),
+		handlers:   make(map[string]MessageHandler),
+		workers:    make([]chan dispatchJob, numWorkers),
+		numWorkers: numWorkers,
 		ctx:        ctx,
 		cancelFunc: cancel,
-	}, nil
+	}
+
+	// Initialize single Multiplexed PubSub connection
+	r.pubsub = r.client.Subscribe(ctx)
+
+	// Spin up workers
+	for i := 0; i < numWorkers; i++ {
+		// Bounded queue to avoid unbound RAM explosions
+		r.workers[i] = make(chan dispatchJob, 1024)
+		go r.runWorker(ctx, r.workers[i])
+	}
+
+	// Spin up dispatcher loop
+	go r.runDispatcher()
+
+	return r, nil
 }
 
 func (r *RedisEngine) Publish(ctx context.Context, channel string, payload []byte) error {
-	return r.client.Publish(ctx, channel, payload).Err()
+	start := time.Now()
+	err := r.client.Publish(ctx, channel, payload).Err()
+	if err == nil {
+		metrics.PublishLatency.Observe(time.Since(start).Seconds())
+	}
+	return err
 }
 
 func (r *RedisEngine) Subscribe(ctx context.Context, channel string, handler MessageHandler) error {
 	r.subsMutex.Lock()
 	defer r.subsMutex.Unlock()
 
-	if _, exists := r.subs[channel]; exists {
-		// Already subscribed in this engine instance
+	if r.subs[channel] {
 		return nil
 	}
 
-	pubsub := r.client.Subscribe(ctx, channel)
-	r.subs[channel] = pubsub
+	r.subs[channel] = true
+	r.handlers[channel] = handler
+	metrics.ActiveSubscriptions.Inc()
 
-	// Start reading loop in a goroutine
-	go func() {
-		ch := pubsub.Channel()
-		for {
-			select {
-			case <-r.ctx.Done():
-				return
-			case msg, ok := <-ch:
-				if !ok {
-					return
-				}
-				handler(msg.Channel, []byte(msg.Payload))
-			}
-		}
-	}()
+	err := r.pubsub.Subscribe(ctx, channel)
+	if err != nil {
+		// Handled proactively by dispatcher's auto-reconnect backoff if network partitioned
+		log.Printf("WARN: Redis Subscribe on %s failed: %v", channel, err)
+	}
 
 	return nil
 }
@@ -78,23 +116,118 @@ func (r *RedisEngine) Unsubscribe(ctx context.Context, channel string) error {
 	r.subsMutex.Lock()
 	defer r.subsMutex.Unlock()
 
-	if pubsub, exists := r.subs[channel]; exists {
-		err := pubsub.Unsubscribe(ctx, channel)
-		pubsub.Close()
-		delete(r.subs, channel)
-		return err
+	if !r.subs[channel] {
+		return nil
 	}
-	return nil
+
+	delete(r.subs, channel)
+	delete(r.handlers, channel)
+	metrics.ActiveSubscriptions.Dec()
+
+	return r.pubsub.Unsubscribe(ctx, channel)
 }
 
 func (r *RedisEngine) Close() error {
 	r.cancelFunc()
-	
+
 	r.subsMutex.Lock()
 	defer r.subsMutex.Unlock()
-	for _, pubsub := range r.subs {
-		pubsub.Close()
+	if r.pubsub != nil {
+		r.pubsub.Close()
 	}
-	r.subs = nil
+
 	return r.client.Close()
+}
+
+func (r *RedisEngine) runDispatcher() {
+	backoff := 100 * time.Millisecond
+	maxBackoff := 5 * time.Second
+
+	for {
+		if r.ctx.Err() != nil {
+			return
+		}
+
+		r.subsMutex.RLock()
+		ps := r.pubsub
+		r.subsMutex.RUnlock()
+
+		msg, err := ps.ReceiveMessage(r.ctx)
+		if err != nil {
+			metrics.ReconnectsTotal.Inc()
+			log.Printf("ERR: Redis network partition detected: %v. Initiating resilient reconnect...", err)
+
+			// Exponential backoff + Jitter
+			jitter := time.Duration(rand.Int63n(int64(backoff)/2 + 1))
+			time.Sleep(backoff + jitter)
+
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+
+			r.resubscribeAll()
+			continue
+		}
+
+		// Reset on success
+		backoff = 100 * time.Millisecond
+
+		job := dispatchJob{channel: msg.Channel, payload: []byte(msg.Payload)}
+		
+		h := fnv.New32a()
+		h.Write([]byte(job.channel))
+		idx := h.Sum32() % uint32(r.numWorkers)
+
+		// Push to worker queue with active backpressure detection
+		select {
+		case r.workers[idx] <- job:
+			// Job scheduled successfully
+		default:
+			metrics.DroppedMessagesTotal.Inc()
+			// Sample 1% of drops to avoid flooding standard output I/O
+			if rand.Float32() < 0.01 {
+				log.Printf("WARN (Sampled): Dropping message locally due to saturated worker pool on channel %s", job.channel)
+			}
+		}
+	}
+}
+
+func (r *RedisEngine) resubscribeAll() {
+	r.subsMutex.Lock()
+	defer r.subsMutex.Unlock()
+
+	if r.pubsub != nil {
+		r.pubsub.Close()
+	}
+
+	r.pubsub = r.client.Subscribe(r.ctx)
+
+	var channels []string
+	for ch := range r.subs {
+		channels = append(channels, ch)
+	}
+
+	if len(channels) > 0 {
+		r.pubsub.Subscribe(r.ctx, channels...)
+	}
+}
+
+func (r *RedisEngine) runWorker(ctx context.Context, ch chan dispatchJob) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-ch:
+			r.subsMutex.RLock()
+			handler, exists := r.handlers[job.channel]
+			r.subsMutex.RUnlock()
+
+			if exists && handler != nil {
+				start := time.Now()
+				handler(job.channel, job.payload)
+				metrics.FanoutLatency.Observe(time.Since(start).Seconds())
+			}
+		}
+	}
 }
