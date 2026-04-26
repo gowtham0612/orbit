@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/orbit/orbit/internal/pubsub"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -27,8 +28,9 @@ func main() {
 	}
 
 	go func() {
-		log.Println("Starting PProf server on :6060")
-		log.Println(http.ListenAndServe("localhost:6060", nil))
+		log.Println("Starting PProf and Prometheus server on :6060")
+		http.Handle("/metrics", promhttp.Handler())
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
 	}()
 
 	numChannels := 10000
