@@ -85,7 +85,7 @@ jobs:
           REDIS_URL: redis://localhost:6379
 
       - name: Run integration test (raw WebSocket)
-        run: node test.js
+        run: node tests/ws-pubsub.test.js
 
       - name: Run integration test (Orbit SDK)
-        run: node test2.js
+        run: node tests/sdk-presence.test.js
