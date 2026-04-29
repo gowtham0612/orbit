@@ -1,7 +1,10 @@
-const fs = require('fs');
 const WebSocket = require('ws');
+const jwt = require('jsonwebtoken');
 
-const ws = new WebSocket('ws://localhost:8080/ws?token=testuser');
+const SECRET = process.env.ORBIT_JWT_SECRET || 'orbit-local-dev-secret-do-not-use-in-production';
+const token = jwt.sign({ sub: 'testuser' }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+
+const ws = new WebSocket(`ws://localhost:8080/ws?token=${token}`);
 
 ws.on('open', () => {
   ws.send(JSON.stringify({ type: 'subscribe', channel: 'room-1' }));
