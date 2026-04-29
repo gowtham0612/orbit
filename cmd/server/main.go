@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/orbit/orbit/internal/auth"
 	"github.com/orbit/orbit/internal/presence"
 	"github.com/orbit/orbit/internal/pubsub"
+	"github.com/orbit/orbit/internal/ratelimit"
 	"github.com/orbit/orbit/internal/router"
 	"github.com/orbit/orbit/internal/ws"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -59,11 +61,17 @@ func main() {
 		}
 	}
 
+	// Rate limiting config
+	rateLimitConns := envInt("ORBIT_RATE_LIMIT_CONNS_PER_SEC", 10)
+	maxConnsPerUser := envInt("ORBIT_MAX_CONNS_PER_USER", 10)
+	trustedProxy := os.Getenv("ORBIT_TRUSTED_PROXY") == "true"
+	ipLimiter := ratelimit.NewIPRateLimiter(rateLimitConns, trustedProxy)
+
 	// 2. Initialize Core Services
 	authenticator := auth.NewJWTAuthenticator(jwtSecret)
 	tracker := presence.NewTracker(redisClient, 45*time.Second) // 45s TTL
-	
-	gateway := ws.NewGateway()
+
+	gateway := ws.NewGateway(maxConnsPerUser)
 	go gateway.Run()
 
 	msgRouter := router.NewDefaultRouter(pubsubEngine, tracker, gateway)
@@ -72,9 +80,22 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// 1. Per-IP rate limit
+		if !ipLimiter.Allow(r) {
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+
+		// 2. Authenticate
 		userID, perms, err := authenticator.Authenticate(r)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// 3. Per-user connection cap (checked before upgrade to avoid wasting the handshake)
+		if !gateway.AllowConnection(userID) {
+			http.Error(w, "too many connections for this user", http.StatusTooManyRequests)
 			return
 		}
 
@@ -135,4 +156,15 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// envInt reads an integer from an environment variable, returning defaultVal if unset or invalid.
+// A value of 0 is valid (e.g. to disable rate limiting).
+func envInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return defaultVal
 }
