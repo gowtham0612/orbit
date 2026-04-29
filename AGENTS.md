@@ -342,7 +342,7 @@ Orbit's thesis: **self-hosted realtime infrastructure with strong presence primi
 > Blockers before any public deployment.
 
 - [ ] Replace auth stub with real JWT / HMAC token validation
-- [ ] Remove `InsecureSkipVerify` from WebSocket accept
+- [x] Remove `InsecureSkipVerify` from WebSocket accept
 - [ ] Implement `CanSubscribe` / `CanPublish` channel-level ACLs
 - [ ] Fix JS SDK `unsubscribe()` to send an unsubscribe frame to the server
 - [ ] Connection rate limiting and per-user connection caps
