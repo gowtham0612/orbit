@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -43,6 +44,16 @@ func main() {
 	}
 	redisClient := redis.NewClient(opts)
 
+	// Allowed origins for WebSocket upgrades (comma-separated)
+	var allowedOrigins []string
+	if raw := os.Getenv("ORBIT_ALLOWED_ORIGINS"); raw != "" {
+		for _, o := range strings.Split(raw, ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				allowedOrigins = append(allowedOrigins, o)
+			}
+		}
+	}
+
 	// 2. Initialize Core Services
 	authenticator := auth.NewTokenAuthenticator("secret") // Stub Secret
 	tracker := presence.NewTracker(redisClient, 45*time.Second) // 45s TTL
@@ -63,7 +74,7 @@ func main() {
 		}
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true, // For cross-origin dev testing
+			OriginPatterns: allowedOrigins,
 		})
 		if err != nil {
 			log.Printf("WS Upgrade Error: %v", err)

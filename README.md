@@ -106,6 +106,7 @@ Each Orbit node holds a single multiplexed Redis PubSub connection. Messages are
 | `PORT` | `8080` | HTTP server listen port |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `ORBIT_FANOUT_WORKERS` | `100` | Worker goroutines for Redis message dispatch |
+| `ORBIT_ALLOWED_ORIGINS` | _(same-origin only)_ | Comma-separated list of allowed WebSocket origins (e.g. `http://localhost:5173,https://myapp.com`) |
 
 ---
 
@@ -175,7 +176,6 @@ npm run dev
 The current release is an **MVP**. Before deploying to production:
 
 - **Auth is a stub** — `token` query param maps directly to a userID. Replace `TokenAuthenticator` in `internal/auth/auth.go` with real JWT or HMAC validation.
-- **`InsecureSkipVerify: true`** is set on WebSocket accept for local dev. Remove this for production.
 - **No TLS** — run behind a reverse proxy (nginx, Caddy) that handles HTTPS/WSS termination.
 
 ---
