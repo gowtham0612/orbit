@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### v0.1 — Trustworthy (upcoming)
 - JWT / HMAC token authentication replacing the current stub
 - Channel-level ACLs (`CanSubscribe` / `CanPublish`)
-- Remove `InsecureSkipVerify` from WebSocket accept
+- ✅ Remove `InsecureSkipVerify` from WebSocket accept — replaced with `ORBIT_ALLOWED_ORIGINS` allowlist
 - JS SDK server-side `unsubscribe` frame
 - Connection rate limiting and per-user connection caps
 - Graceful shutdown with in-flight message draining
