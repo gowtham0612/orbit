@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### v0.1 — Trustworthy (upcoming)
 - ✅ JWT HS256 token authentication — replaces auth stub; `ORBIT_JWT_SECRET` required (min 32 chars); anonymous connections rejected
-- Channel-level ACLs (`CanSubscribe` / `CanPublish`)
+- ✅ Channel-level ACLs via JWT `channels` claim — deny by default, wildcard pattern support (`room-*`, `*`), publish denial now returns error frame
 - ✅ Remove `InsecureSkipVerify` from WebSocket accept — replaced with `ORBIT_ALLOWED_ORIGINS` allowlist
 - ✅ Fix JS SDK `unsubscribe()` — now sends unsubscribe frame to server when last handler is removed
 - ✅ Fix `/api/presence` — all responses now return `Content-Type: application/json` (error paths were returning `text/plain`)
