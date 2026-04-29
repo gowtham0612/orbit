@@ -79,7 +79,9 @@ export class Orbit {
         
         if (channelHandlers.size === 0) {
             this.handlers.delete(channel);
-            // Optional: send unsubscribe event to server if we want strict resource freeing
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.sendRaw({ type: "unsubscribe", channel });
+            }
         }
     }
 
