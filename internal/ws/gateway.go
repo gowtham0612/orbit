@@ -12,16 +12,27 @@ type Gateway struct {
 	Unregister chan *Client
 	Clients    map[*Client]bool
 	mu         sync.RWMutex
+
+	maxConnsPerUser int
+	userConns       map[string]int // userID -> active connection count
 }
 
-
-
-func NewGateway() *Gateway {
+func NewGateway(maxConnsPerUser int) *Gateway {
 	return &Gateway{
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Clients:    make(map[*Client]bool),
+		Register:        make(chan *Client),
+		Unregister:      make(chan *Client),
+		Clients:         make(map[*Client]bool),
+		maxConnsPerUser: maxConnsPerUser,
+		userConns:       make(map[string]int),
 	}
+}
+
+// ConnCount returns the current number of open connections for a userID.
+// Returns (count, overLimit) — overLimit is true if adding one more would exceed the cap.
+func (g *Gateway) AllowConnection(userID string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.userConns[userID] < g.maxConnsPerUser
 }
 
 func (g *Gateway) Run() {
@@ -30,6 +41,7 @@ func (g *Gateway) Run() {
 		case client := <-g.Register:
 			g.mu.Lock()
 			g.Clients[client] = true
+			g.userConns[client.UserID]++
 			metrics.ActiveConnections.Inc()
 			g.mu.Unlock()
 
@@ -39,6 +51,12 @@ func (g *Gateway) Run() {
 				delete(g.Clients, client)
 				close(client.Send)
 				metrics.ActiveConnections.Dec()
+				if g.userConns[client.UserID] > 0 {
+					g.userConns[client.UserID]--
+				}
+				if g.userConns[client.UserID] == 0 {
+					delete(g.userConns, client.UserID)
+				}
 			}
 			g.mu.Unlock()
 		}
@@ -46,7 +64,6 @@ func (g *Gateway) Run() {
 }
 
 func (g *Gateway) BroadcastLocal(channel string, env interface{}) {
-	// If we map clients to channels in Gateway we can target them, 
-	// but for now router will fan out, or we can look up clients by subscription here.
-	// We'll leave this to the router for complexity separation.
+	// Routing is handled by the router; left as extension point.
 }
+
