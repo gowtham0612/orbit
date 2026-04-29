@@ -12,6 +12,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - PORT=8080
+      - ORBIT_ALLOWED_ORIGINS=http://localhost:5173
     depends_on:
       - redis
     develop:
